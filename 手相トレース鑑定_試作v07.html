@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>手相トレース鑑定機 試作 v0.1</title>
+<style>
+  :root{
+    --bg:#1a1714; --panel:#241f1a; --panel2:#2d2720;
+    --ink:#ece5d8; --muted:#a89a85; --gold:#c9a227;
+    --border:#3c352c;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:"Hiragino Mincho ProN","Yu Mincho","Noto Serif JP",serif;
+    line-height:1.7; padding:16px; max-width:720px; margin:0 auto;
+    -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+    overscroll-behavior:none;
+  }
+  pre, #json{-webkit-user-select:text; user-select:text;}
+  header{text-align:center; padding:18px 0 10px; border-bottom:1px solid var(--gold);}
+  header h1{font-size:22px; font-weight:600; letter-spacing:.18em; color:var(--gold);}
+  header p{font-size:12px; color:var(--muted); letter-spacing:.1em; margin-top:4px;}
+  section{
+    background:var(--panel); border:1px solid var(--border); border-radius:10px;
+    padding:14px; margin-top:14px;
+  }
+  section.locked{opacity:.45; pointer-events:none;}
+  h2{font-size:15px; color:var(--gold); letter-spacing:.12em; margin-bottom:8px;}
+  h2 .step{
+    display:inline-block; width:22px; height:22px; line-height:22px; text-align:center;
+    border:1px solid var(--gold); border-radius:50%; font-size:12px; margin-right:8px;
+  }
+  .hint{font-size:12px; color:var(--muted); margin-bottom:8px;}
+  button{
+    font-family:inherit; font-size:14px; color:var(--ink);
+    background:var(--panel2); border:1px solid var(--border); border-radius:8px;
+    padding:9px 14px; cursor:pointer; touch-action:manipulation;
+  }
+  button:active{background:#3a3329;}
+  button.primary{border-color:var(--gold); color:var(--gold);}
+  button.on{background:var(--gold); color:#1a1714; border-color:var(--gold); font-weight:600;}
+  .row{display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;}
+  .chip{
+    font-size:13px; padding:7px 11px; border-radius:999px;
+    border:1.5px solid var(--c,#888); color:var(--c,#aaa); background:transparent;
+  }
+  .chip.on{background:var(--c); color:#1a1714; font-weight:600;}
+  #canvasWrap{position:relative; margin-top:10px; display:none;}
+  canvas{
+    width:100%; display:block; border-radius:8px; border:1px solid var(--border);
+    touch-action:none; background:#000;
+  }
+  #status{
+    font-size:13px; color:var(--gold); min-height:1.6em; margin-top:8px;
+    letter-spacing:.05em;
+  }
+  pre{
+    background:#13100d; border:1px solid var(--border); border-radius:8px;
+    padding:12px; font-size:12px; overflow-x:auto; white-space:pre-wrap;
+    font-family:"SF Mono",Menlo,Consolas,monospace; color:#cfe3c9;
+  }
+  #summary{font-size:14px; margin-top:10px;}
+  #summary .lineTitle{color:var(--gold); margin-top:10px; font-weight:600;}
+  input[type=file]{display:none;}
+  label.file{
+    display:inline-block; border:1px solid var(--gold); color:var(--gold);
+    border-radius:8px; padding:10px 16px; cursor:pointer; font-size:14px;
+  }
+  footer{text-align:center; font-size:11px; color:var(--muted); padding:20px 0;}
+</style>
+</head>
+<body>
+<header>
+  <h1>掌 紋 解 読 盤</h1>
+  <p>手相トレース鑑定機 ── 試作 v0.7(検出診断つき)</p>
+</header>
+
+<section id="s1">
+  <h2><span class="step">一</span>掌の写真を読み込む</h2>
+  <p class="hint">明るい場所で、掌全体が真上から写るように撮影してください。</p>
+  <label class="file">写真を選ぶ / 撮影する<input type="file" id="photo" accept="image/*"></label>
+  <p class="hint" id="mpState" style="margin-top:8px;">検出モデル:待機中…</p>
+</section>
+
+<section id="s2" class="locked">
+  <h2><span class="step">二</span>基準点(自動検出)</h2>
+  <p class="hint">写真を読み込むと、手を自動検出して基準点(手首と中指の付け根)が自動で設定されます。通常はこの手順での操作は不要です。</p>
+  <p class="hint">自動検出に失敗した場合や位置を直したい場合のみ手動設定してください:親指の向きを選び、画像上で <b>①手首の横じわの中央</b> → <b>②中指の付け根</b> の順にタップ。「付け根」とは中指が掌から生え始める境目のこと(指先の反対側)。中指を内側に曲げると指と掌の境目に横じわが折れる場所ができます。そこをタップしてください。</p>
+  <div class="row">
+    <button class="primary" id="retryAuto">自動検出をやり直す</button>
+    <button id="thumbL">親指は左側</button>
+    <button id="thumbR">親指は右側</button>
+    <button id="refReset">基準点をやり直す</button>
+  </div>
+</section>
+
+<div id="canvasWrap"><canvas id="cv"></canvas></div>
+<div id="status">写真を読み込むと盤面が現れます。</div>
+
+<section id="s3" class="locked">
+  <h2><span class="step">三</span>線を選んでなぞる</h2>
+  <p class="hint">線を選び、画像の上を指でゆっくりなぞってください。途切れた線は途切れたまま、複数回に分けてなぞれます。支線も同じ線種のまま追加でなぞってください。</p>
+  <div class="row" id="lineChips"></div>
+  <div class="row">
+    <button id="enhanceBtn">線を強調表示</button>
+    <button id="undoStroke">一画戻す</button>
+    <button id="clearLine">この線を消す</button>
+  </div>
+</section>
+
+<section id="s4" class="locked">
+  <h2><span class="step">四</span>記号を置く(任意)</h2>
+  <p class="hint">なぞるだけでは判別できない記号(島・鎖など)は、種類を選んでから該当する位置をタップしてください。直前に選択中の線に紐づきます。</p>
+  <div class="row" id="symChips"></div>
+  <div class="row"><button id="symOff">記号モード終了</button><button id="symUndo">記号を1つ消す</button></div>
+</section>
+
+<section id="s5" class="locked">
+  <h2><span class="step">五</span>解析する</h2>
+  <div class="row">
+    <button class="primary" id="analyze">特徴を数値化する</button>
+    <button id="copyJson">JSONをコピー</button>
+    <button id="resetAll">最初からやり直す</button>
+  </div>
+  <div id="summary"></div>
+  <pre id="json" style="display:none"></pre>
+</section>
+
+<footer>試作版 ── 数値化の閾値は仮設定です。知識ベース接続前のデバッグ用。</footer>
+
+<script type="module">
+(async ()=>{
+  const report = (s, m)=>{ if(window.__mpReport) window.__mpReport(s, m||""); };
+  const SOURCES = [
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35",
+    "https://unpkg.com/@mediapipe/tasks-vision@0.10.35"
+  ];
+  let lastErr = null;
+  for(const base of SOURCES){
+    try{
+      report("loading", base.includes("jsdelivr") ? "系統1" : "系統2");
+      const mod = await import(base + "/vision_bundle.mjs");
+      const vision = await mod.FilesetResolver.forVisionTasks(base + "/wasm");
+      window.__handLandmarker = await mod.HandLandmarker.createFromOptions(vision, {
+        baseOptions:{ modelAssetPath:
+          "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task" },
+        runningMode:"IMAGE", numHands:1
+      });
+      report("ready");
+      if(window.__onLandmarkerReady) window.__onLandmarkerReady();
+      return;
+    }catch(e){ lastErr = e; }
+  }
+  window.__mpError = lastErr;
+  report("fail", (lastErr && (lastErr.message||String(lastErr))) || "不明なエラー");
+  if(window.__onLandmarkerFail) window.__onLandmarkerFail(lastErr);
+})();
+</script>
+
+<script>
+"use strict";
+const LINES = [
+  {key:"生命線", c:"#d85a30"},
+  {key:"知能線", c:"#5aa7e8"},
+  {key:"感情線", c:"#e07a9e"},
+  {key:"運命線", c:"#9d93f0"},
+  {key:"太陽線", c:"#efb127"},
+  {key:"結婚線", c:"#3dbb95"},
+  {key:"財運線", c:"#a8d06a"},
+  {key:"健康線", c:"#b4b2a9"}
+];
+const SYMBOLS = ["島","鎖","十字","星","格子","房"];
+
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+const statusEl = document.getElementById("status");
+
+let img = null;
+let refPts = [];            // [{x,y}] image coords: ①手首中央 ②中指付け根
+let thumbSide = null;       // "left" | "right"
+let mode = "idle";          // idle | ref | trace | symbol
+let currentLine = null;     // key
+let currentSym = null;
+let strokes = {};           // key -> [ [{x,y},...], ... ]
+let symbols = [];           // {sym, line, x, y}
+let drawing = false;
+let cur = [];
+let enh = null, enhanceOn = false;
+
+function setStatus(t){ statusEl.textContent = t; }
+function unlock(id){ document.getElementById(id).classList.remove("locked"); }
+function scrollToCanvas(){
+  const w = document.getElementById("canvasWrap");
+  if(w.style.display==="block") w.scrollIntoView({behavior:"smooth", block:"center"});
+}
+
+/* ---------- チップ生成 ---------- */
+const lineChipsEl = document.getElementById("lineChips");
+LINES.forEach(l=>{
+  const b = document.createElement("button");
+  b.className = "chip"; b.textContent = l.key; b.style.setProperty("--c", l.c);
+  b.onclick = ()=>{
+    currentLine = l.key; mode = "trace"; currentSym = null;
+    [...lineChipsEl.children].forEach(x=>x.classList.toggle("on", x===b));
+    [...symChipsEl.children].forEach(x=>x.classList.remove("on"));
+    setStatus(l.key + " をなぞってください(複数画OK)。");
+    scrollToCanvas();
+  };
+  lineChipsEl.appendChild(b);
+});
+const symChipsEl = document.getElementById("symChips");
+SYMBOLS.forEach(s=>{
+  const b = document.createElement("button");
+  b.className = "chip"; b.style.setProperty("--c", "#c9a227"); b.textContent = s;
+  b.onclick = ()=>{
+    if(!currentLine){ setStatus("先に線を選んでください。記号は線に紐づきます。"); return; }
+    currentSym = s; mode = "symbol";
+    [...symChipsEl.children].forEach(x=>x.classList.toggle("on", x===b));
+    setStatus(currentLine + " 上の「" + s + "」の位置をタップしてください。");
+    scrollToCanvas();
+  };
+  symChipsEl.appendChild(b);
+});
+document.getElementById("symOff").onclick = ()=>{
+  currentSym = null; mode = currentLine ? "trace" : "idle";
+  [...symChipsEl.children].forEach(x=>x.classList.remove("on"));
+  setStatus("記号モードを終了しました。");
+};
+document.getElementById("symUndo").onclick = ()=>{ symbols.pop(); redraw(); };
+
+/* ---------- 写真読み込み ---------- */
+document.getElementById("photo").addEventListener("change", async e=>{
+  const f = e.target.files[0]; if(!f) return;
+  setStatus("写真を読み込んでいます…");
+  try{
+    let src = null, w = 0, h = 0;
+    if(window.createImageBitmap){
+      try{ src = await createImageBitmap(f, {imageOrientation:"from-image"}); }
+      catch(_){ try{ src = await createImageBitmap(f); }catch(_2){ src = null; } }
+    }
+    if(src){ w = src.width; h = src.height; }
+    else{
+      src = await new Promise((res, rej)=>{
+        const im = new Image();
+        im.onload = ()=>res(im);
+        im.onerror = ()=>rej(new Error("decode"));
+        im.src = URL.createObjectURL(f);
+      });
+      w = src.naturalWidth; h = src.naturalHeight;
+    }
+    if(!w || !h) throw new Error("size");
+
+    const MAX = 1600;
+    const sc = Math.min(1, MAX / Math.max(w, h));
+    const off = document.createElement("canvas");
+    off.width = Math.round(w * sc); off.height = Math.round(h * sc);
+    off.getContext("2d").drawImage(src, 0, 0, off.width, off.height);
+    if(src.close) src.close();
+
+    img = off;
+    cv.width = off.width; cv.height = off.height;
+    document.getElementById("canvasWrap").style.display = "block";
+    refPts = []; strokes = {}; symbols = []; thumbSide = null; currentLine = null;
+    enh = null; enhanceOn = false;
+    unlock("s2");
+    redraw();
+    scrollToCanvas();
+    autoDetect();
+  }catch(err){
+    setStatus("写真の読み込みに失敗しました。別の写真でお試しください。(" + (err.message||err) + ")");
+  }finally{
+    e.target.value = "";
+  }
+});
+
+/* ---------- 手の自動検出 ---------- */
+let awaitingModel = false;
+const mpStateEl = document.getElementById("mpState");
+window.__mpReport = (s, m)=>{
+  if(s==="loading") mpStateEl.textContent = "検出モデル:読み込み中(" + m + ")…";
+  if(s==="ready")   mpStateEl.textContent = "検出モデル:準備完了 ✓";
+  if(s==="fail")    mpStateEl.textContent = "検出モデル:読み込み失敗 ── " + m;
+};
+document.getElementById("retryAuto").onclick = ()=>{
+  if(!img){ setStatus("先に写真を読み込んでください。"); return; }
+  autoDetect();
+};
+function autoDetect(){
+  if(!img) return;
+  const lm = window.__handLandmarker;
+  if(window.__mpError){ manualFallback("自動検出を読み込めませんでした(通信環境をご確認ください)。"); return; }
+  if(!lm){
+    awaitingModel = true;
+    setStatus("自動検出の準備中です。数秒お待ちください…(その間に手動設定も可能です)");
+    mode = "ref";
+    return;
+  }
+  try{
+    const res = lm.detect(img);
+    if(res && res.landmarks && res.landmarks.length){
+      const L = res.landmarks[0];
+      const P = i=>({x:L[i].x*cv.width, y:L[i].y*cv.height});
+      const w0 = P(0), f9 = P(9), t2 = P(2);
+      refPts = [w0, f9];
+      const ux=f9.x-w0.x, uy=f9.y-w0.y, unit=Math.hypot(ux,uy);
+      const ax=ux/unit, ay=uy/unit, px=-ay, py=ax;
+      const rawX = (t2.x-w0.x)*px + (t2.y-w0.y)*py;
+      setThumb(rawX > 0 ? "right" : "left");
+      mode = "idle";
+      redraw();
+      setStatus("手を自動検出しました(親指は" + (thumbSide==="right"?"右":"左") + "側)。手順三で線を選んでなぞってください。位置がずれていれば「基準点をやり直す」で手動修正できます。");
+    }else{
+      manualFallback("手を検出できませんでした。明るい場所で掌全体を写すか、手動で設定してください。");
+    }
+  }catch(e){
+    manualFallback("自動検出でエラーが起きました(" + (e.message||e) + ")。手動で設定してください。");
+  }
+}
+function manualFallback(msg){
+  mode = "ref";
+  setStatus(msg + " 親指の向きを選び、①手首の中央をタップしてください。");
+}
+window.__onLandmarkerReady = ()=>{ if(awaitingModel){ awaitingModel=false; autoDetect(); } };
+window.__onLandmarkerFail  = ()=>{ if(awaitingModel){ awaitingModel=false; manualFallback("自動検出を読み込めませんでした。"); } };
+
+document.getElementById("thumbL").onclick = ()=>setThumb("left");
+document.getElementById("thumbR").onclick = ()=>setThumb("right");
+function setThumb(s){
+  thumbSide = s;
+  document.getElementById("thumbL").classList.toggle("on", s==="left");
+  document.getElementById("thumbR").classList.toggle("on", s==="right");
+  if(refPts.length===0) setStatus("画像上で ①手首の中央 をタップしてください。");
+  else if(refPts.length===1) setStatus("画像上で ②中指の付け根 をタップしてください。");
+  maybeReady();
+}
+document.getElementById("refReset").onclick = ()=>{
+  refPts = []; mode = "ref";
+  setStatus("①手首の中央 をタップし直してください。");
+  redraw();
+};
+
+function maybeReady(){
+  if(refPts.length>=2 && thumbSide){
+    unlock("s3"); unlock("s4"); unlock("s5");
+    if(mode==="ref") mode = "idle";
+    setStatus("準備完了。三で線を選んでなぞってください。");
+  }
+}
+
+/* ---------- 座標取得 ---------- */
+function evPos(e){
+  const r = cv.getBoundingClientRect();
+  return {
+    x: (e.clientX - r.left) * (cv.width / r.width),
+    y: (e.clientY - r.top) * (cv.height / r.height)
+  };
+}
+
+cv.addEventListener("touchstart", e=>e.preventDefault(), {passive:false});
+cv.addEventListener("touchmove",  e=>e.preventDefault(), {passive:false});
+
+cv.addEventListener("pointerdown", e=>{
+  e.preventDefault();
+  const p = evPos(e);
+  if(mode==="ref"){
+    if(refPts.length < 2){
+      refPts.push(p);
+      if(refPts.length===1) setStatus("②中指の付け根 をタップしてください。");
+      if(refPts.length===2){
+        setStatus(thumbSide ? "基準点が定まりました。" : "基準点が定まりました。上の「親指は左側/右側」を選んでください。");
+        maybeReady();
+      }
+    }else{
+      setStatus("基準点は2点で確定済みです。やり直す場合は「基準点をやり直す」を押してください。");
+      maybeReady();
+    }
+    redraw(); return;
+  }
+  if(mode==="symbol" && currentSym && currentLine){
+    symbols.push({sym:currentSym, line:currentLine, x:p.x, y:p.y});
+    setStatus(currentLine + " に「" + currentSym + "」を記録しました。");
+    redraw(); return;
+  }
+  if(mode==="trace" && currentLine){
+    drawing = true; cur = [p];
+    try{ cv.setPointerCapture(e.pointerId); }catch(_){}
+    return;
+  }
+  if(img && refPts.length>=2){
+    setStatus("下の手順三で線を選んでから、なぞってください。");
+  }
+});
+cv.addEventListener("pointermove", e=>{
+  if(!drawing) return;
+  e.preventDefault();
+  const p = evPos(e);
+  const last = cur[cur.length-1];
+  const minD = cv.width * 0.003;
+  if(Math.hypot(p.x-last.x, p.y-last.y) > minD){ cur.push(p); redraw(); }
+});
+function endStroke(e){
+  if(!drawing) return;
+  drawing = false;
+  if(cur.length >= 5){
+    if(!strokes[currentLine]) strokes[currentLine] = [];
+    strokes[currentLine].push(smooth(cur));
+    setStatus(currentLine + ":" + strokes[currentLine].length + " 画目を記録(" + cur.length + "点)。");
+  }
+  cur = []; redraw();
+}
+cv.addEventListener("pointerup", endStroke);
+cv.addEventListener("pointercancel", endStroke);
+
+document.getElementById("undoStroke").onclick = ()=>{
+  if(currentLine && strokes[currentLine] && strokes[currentLine].length){
+    strokes[currentLine].pop(); redraw();
+    setStatus(currentLine + " の最後の一画を消しました。");
+  }
+};
+document.getElementById("clearLine").onclick = ()=>{
+  if(currentLine){ delete strokes[currentLine];
+    symbols = symbols.filter(s=>s.line!==currentLine);
+    redraw(); setStatus(currentLine + " を消しました。"); }
+};
+document.getElementById("resetAll").onclick = ()=>location.reload();
+
+/* ---------- 線の強調表示 ---------- */
+document.getElementById("enhanceBtn").onclick = ()=>{
+  if(!img) return;
+  if(!enh){
+    setStatus("強調画像を生成しています…");
+    setTimeout(()=>{
+      enh = buildEnhanced(); enhanceOn = true;
+      document.getElementById("enhanceBtn").classList.add("on");
+      redraw(); setStatus("線を強調表示しています。もう一度押すと元に戻ります。");
+    }, 30);
+  }else{
+    enhanceOn = !enhanceOn;
+    document.getElementById("enhanceBtn").classList.toggle("on", enhanceOn);
+    redraw();
+    setStatus(enhanceOn ? "線を強調表示しています。" : "元の写真に戻しました。");
+  }
+};
+function buildEnhanced(){
+  const w = img.width, h = img.height;
+  const a = document.createElement("canvas"); a.width = w; a.height = h;
+  const ac = a.getContext("2d");
+  ac.drawImage(img, 0, 0);
+  const src = ac.getImageData(0, 0, w, h);
+  const s = document.createElement("canvas");
+  s.width = Math.max(1, w>>3); s.height = Math.max(1, h>>3);
+  s.getContext("2d").drawImage(img, 0, 0, s.width, s.height);
+  const b = document.createElement("canvas"); b.width = w; b.height = h;
+  const bc = b.getContext("2d"); bc.drawImage(s, 0, 0, w, h);
+  const blr = bc.getImageData(0, 0, w, h);
+  const out = ac.createImageData(w, h);
+  const d = src.data, e2 = blr.data, o = out.data;
+  for(let i=0; i<d.length; i+=4){
+    const g  = 0.299*d[i]  + 0.587*d[i+1]  + 0.114*d[i+2];
+    const gb = 0.299*e2[i] + 0.587*e2[i+1] + 0.114*e2[i+2];
+    let v = 128 + (g - gb) * 3.2;
+    v = v<0 ? 0 : (v>255 ? 255 : v);
+    o[i]=o[i+1]=o[i+2]=v; o[i+3]=255;
+  }
+  ac.putImageData(out, 0, 0);
+  return a;
+}
+
+/* ---------- 平滑化(移動平均) ---------- */
+function smooth(pts, w=5){
+  const out = [];
+  for(let i=0;i<pts.length;i++){
+    let sx=0, sy=0, n=0;
+    for(let j=Math.max(0,i-w); j<=Math.min(pts.length-1,i+w); j++){ sx+=pts[j].x; sy+=pts[j].y; n++; }
+    out.push({x:sx/n, y:sy/n});
+  }
+  return out;
+}
+
+/* ---------- 描画 ---------- */
+function redraw(){
+  if(!img) return;
+  ctx.drawImage(enhanceOn && enh ? enh : img, 0, 0);
+  const lw = Math.max(2, cv.width*0.005);
+  for(const l of LINES){
+    const ss = strokes[l.key]; if(!ss) continue;
+    ctx.strokeStyle = l.c; ctx.lineWidth = lw; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    for(const st of ss){ pathOf(st); ctx.stroke(); }
+  }
+  if(drawing && cur.length>1 && currentLine){
+    ctx.strokeStyle = (LINES.find(l=>l.key===currentLine)||{}).c || "#fff";
+    ctx.lineWidth = lw; pathOf(cur); ctx.stroke();
+  }
+  // 記号
+  ctx.font = (cv.width*0.035) + "px serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for(const s of symbols){
+    ctx.fillStyle = "rgba(26,23,20,.7)";
+    ctx.beginPath(); ctx.arc(s.x, s.y, cv.width*0.026, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = "#c9a227"; ctx.fillText(s.sym, s.x, s.y);
+  }
+  // 基準点
+  refPts.forEach((p,i)=>{
+    const r = cv.width*0.02;
+    ctx.strokeStyle = "#c9a227"; ctx.lineWidth = Math.max(2, cv.width*0.004);
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(p.x-r*1.6, p.y); ctx.lineTo(p.x+r*1.6, p.y);
+    ctx.moveTo(p.x, p.y-r*1.6); ctx.lineTo(p.x, p.y+r*1.6);
+    ctx.stroke();
+    const lbl = i===0 ? "①手首" : "②付け根";
+    ctx.font = (cv.width*0.045)+"px serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.lineWidth = Math.max(3, cv.width*0.008);
+    ctx.strokeStyle = "#1a1714";
+    ctx.strokeText(lbl, p.x, p.y - r*3);
+    ctx.fillStyle = "#c9a227";
+    ctx.fillText(lbl, p.x, p.y - r*3);
+  });
+}
+function pathOf(pts){
+  ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+  for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x, pts[i].y);
+}
+
+/* ---------- 掌座標系と九丘 ---------- */
+function palmCoord(p){
+  const [w, f] = refPts;
+  const ux = f.x-w.x, uy = f.y-w.y;
+  const unit = Math.hypot(ux, uy);
+  const ax = ux/unit, ay = uy/unit;          // 手首→指 方向
+  const px = -ay, py = ax;                    // 垂直方向(画面右向き成分)
+  const vx = p.x-w.x, vy = p.y-w.y;
+  let X = (vx*px + vy*py)/unit;               // +X = 画像右方向
+  const Y = (vx*ax + vy*ay)/unit;             // 0=手首, 1=中指付け根
+  if(thumbSide==="left") X = -X;              // +X = 常に親指側 に統一
+  return {x:X, y:Y, unit};
+}
+function zoneName(c){
+  const x = c.x, y = c.y;
+  if(y > 0.66){
+    if(x > 0.15) return "木星丘";
+    if(x < -0.15) return "水星丘";
+    return (x > 0) ? "土星丘" : "太陽丘";
+  }
+  if(y > 0.33){
+    if(x > 0.2) return "第一火星丘";
+    if(x < -0.2) return "第二火星丘";
+    return "火星平原";
+  }
+  if(x > 0.15) return "金星丘";
+  if(x < -0.15) return "月丘";
+  return "地丘";
+}
+
+/* ---------- 特徴抽出 ---------- */
+function pathLen(pts){
+  let L=0; for(let i=1;i<pts.length;i++) L+=Math.hypot(pts[i].x-pts[i-1].x, pts[i].y-pts[i-1].y);
+  return L;
+}
+function nearAny(p, pts, th){
+  for(const q of pts){ if(Math.hypot(p.x-q.x, p.y-q.y) < th) return true; }
+  return false;
+}
+function extract(lineKey){
+  const ss = strokes[lineKey]; if(!ss || !ss.length) return null;
+  const unit = Math.hypot(refPts[1].x-refPts[0].x, refPts[1].y-refPts[0].y);
+
+  // 主線 = 最長ストローク
+  let main = ss[0];
+  for(const s of ss) if(pathLen(s) > pathLen(main)) main = s;
+
+  let branches = 0, gaps = 0;
+  for(const s of ss){
+    if(s===main) continue;
+    const headNear = nearAny(s[0], main, unit*0.07) || nearAny(s[s.length-1], main, unit*0.07);
+    if(headNear) branches++; else gaps++;
+  }
+
+  const totalLen = ss.reduce((a,s)=>a+pathLen(s), 0) / unit;
+  const a = main[0], b = main[main.length-1];
+  const chord = Math.hypot(b.x-a.x, b.y-a.y);
+  let maxDev = 0;
+  if(chord > 1){
+    const nx = -(b.y-a.y)/chord, ny = (b.x-a.x)/chord;
+    for(const p of main){
+      const d = Math.abs((p.x-a.x)*nx + (p.y-a.y)*ny);
+      if(d>maxDev) maxDev = d;
+    }
+  }
+  const curv = chord>1 ? maxDev/chord : 0;
+
+  const cs = palmCoord(a), ce = palmCoord(b);
+  // 手首に近い側を「起点」と定義(なぞる向きに依存させない)
+  let start = cs, end = ce, sp = a, ep = b;
+  if(ce.y < cs.y){ start = ce; end = cs; sp = b; ep = a; }
+
+  const lenEval = totalLen < 0.7 ? "短い" : (totalLen <= 1.1 ? "標準" : "長い");
+  const curvEval = curv < 0.08 ? "直線的" : (curv < 0.18 ? "ゆるやかな曲線" : "大きな湾曲");
+
+  const syms = symbols.filter(s=>s.line===lineKey).map(s=>{
+    const c = palmCoord({x:s.x, y:s.y});
+    return {記号:s.sym, 位置:zoneName(c)};
+  });
+
+  return {
+    長さ比: +totalLen.toFixed(2), 長さ: lenEval,
+    曲率比: +curv.toFixed(3), 曲がり: curvEval,
+    起点: zoneName(start), 終点: zoneName(end),
+    画数: ss.length, 支線: branches, 分断: gaps,
+    記号: syms
+  };
+}
+
+/* ---------- 解析・出力 ---------- */
+let lastJson = "";
+document.getElementById("analyze").onclick = ()=>{
+  if(refPts.length<2){ setStatus("先に基準点を設定してください。"); return; }
+  const result = {};
+  for(const l of LINES){
+    const f = extract(l.key);
+    if(f) result[l.key] = f;
+  }
+  if(!Object.keys(result).length){ setStatus("まだ線がなぞられていません。"); return; }
+
+  lastJson = JSON.stringify(result, null, 2);
+  const pre = document.getElementById("json");
+  pre.textContent = lastJson; pre.style.display = "block";
+
+  const sum = document.getElementById("summary");
+  sum.innerHTML = "";
+  for(const [k, f] of Object.entries(result)){
+    const d = document.createElement("div");
+    const symTxt = f.記号.length ? " ── " + f.記号.map(s=>s.位置+"に"+s.記号).join("、") : "";
+    const gapTxt = f.分断 ? "、分断" + f.分断 + "箇所" : "";
+    const brTxt = f.支線 ? "、支線" + f.支線 + "本" : "";
+    d.innerHTML = '<div class="lineTitle">' + k + '</div>' +
+      f.起点 + "から" + f.終点 + "へ。" + f.長さ + "(長さ比" + f.長さ比 + ")、" +
+      f.曲がり + gapTxt + brTxt + "。" + symTxt;
+    sum.appendChild(d);
+  }
+  setStatus("数値化が完了しました。このJSONが知識ベース照合の入力になります。");
+};
+document.getElementById("copyJson").onclick = async ()=>{
+  if(!lastJson){ setStatus("先に解析してください。"); return; }
+  try{ await navigator.clipboard.writeText(lastJson); setStatus("JSONをコピーしました。"); }
+  catch(e){ setStatus("コピーできない環境です。長押しで選択してください。"); }
+};
+</script>
+</body>
+</html>
